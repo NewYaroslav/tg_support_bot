@@ -1,0 +1,7 @@
+❓ Help
+
+Available commands:
+/start – Begin a new support request
+/help – Show this help message
+
+If you need further assistance, send your email to authorize.

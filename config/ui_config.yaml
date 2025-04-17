@@ -1,0 +1,26 @@
+telegram_menu:
+  - command: start
+    description: "Обратиться за помощью"
+  - command: help
+    description: "Показать справку"
+
+telegram_start:
+  show_action_button_if_authorized: true
+  action_button_text: "📨 Отправить обращение"
+
+authorization:
+  confirm_change_buttons:
+    yes: "✅ Да"
+    no: "❌ Нет"
+
+ticket_categories:
+  - "💻 Аппаратные сбои"
+  - "🛠 Программные ошибки"
+  - "🌐 Сетевые проблемы"
+  - "🔑 Запросы на доступ"
+  - "🛡 Кибербезопасность"
+  - "❗ Жалоба/Благодарность"
+  - "📁 Другое"
+
+message_limits:
+  max_submission_length: 1500

@@ -1,0 +1,19 @@
+[project]
+name = "tg_support_bot"
+version = "0.1.0"
+description = "Telegram support bot"
+authors = [
+  { name = "Yaroslav", email = "git.electroyar@gmail.com" }
+]
+dependencies = [
+  "python-telegram-bot==20.7",
+  "python-dotenv==1.0.1",
+  "PyYAML==6.0.1",
+  "colorlog==6.9.0",
+  "rich==13.9.4",
+  "Jinja2==3.1.3"
+]
+requires-python = ">=3.9"
+
+[project.scripts]
+tg-support-bot = "telegram_bot:run_telegram_bot"

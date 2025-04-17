@@ -1,11 +1,20 @@
 <!DOCTYPE html>
 <html>
-  <body>
-    <h3>Новое обращение</h3>
-    <p><strong>От:</strong> {{ email }}</p>
-    <p><strong>Telegram:</strong> {{ telegram_username }}</p>
-    <p><strong>Тема:</strong> {{ topic }}</p>
-    <p><strong>Сообщение:</strong></p>
-    <p>{{ message }}</p>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; line-height: 1.5; }
+    .header { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <p class="header">Новое обращение от пользователя:</p>
+  <ul>
+    <li><strong>Telegram:</strong> {{ telegram_username }}</li>
+    <li><strong>Email:</strong> {{ email }}</li>
+    <li><strong>Категория:</strong> {{ topic }}</li>
+  </ul>
+  <p><strong>Сообщение:</strong></p>
+  <pre>{{ message }}</pre>
+</body>
 </html>

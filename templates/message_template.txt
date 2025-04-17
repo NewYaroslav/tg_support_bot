@@ -1,0 +1,5 @@
+📢 Test message from bot
+
+Bot is running!
+User: {{ user }}
+Date: {{ date }}

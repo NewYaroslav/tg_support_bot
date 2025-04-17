@@ -1,0 +1,7 @@
+auth:
+  email_pattern: "^[a-zA-Z0-9_.+-]+@(?:[a-zA-Z0-9-]+\\.)?[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}$"
+  email_autocomplete: "@gmail.com"
+  allow_incomplete_input: true
+  send_welcome_before_topic: true
+  send_topic_after_auth: true
+  delay_after_auth_success: 2  # секунды

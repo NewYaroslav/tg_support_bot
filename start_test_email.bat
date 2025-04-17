@@ -1,5 +1,6 @@
 @echo off
+set PYTHONPATH=%cd%
 call venv\Scripts\activate
-python email_sender.py
+python modules\email_sender.py
 pause
 deactivate

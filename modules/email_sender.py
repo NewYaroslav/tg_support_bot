@@ -1,10 +1,12 @@
 import os
 import logging
 import smtplib
+from modules.logging_config import logger
 from email.message import EmailMessage
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from rich.console import Console
+from modules.template_engine import render_template
 
 console = Console()
 
@@ -15,32 +17,6 @@ EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-
-# Логгер
-logger = logging.getLogger("tg_support_bot.email")
-
-# Jinja2 шаблонизатор
-env = Environment(
-    loader=FileSystemLoader("templates"),
-    autoescape=select_autoescape(["html", "xml"])
-)
-
-
-def render_template(template_name: str, **context) -> str:
-    """
-    Renders an HTML template from templates/ with given variables.
-    
-    @param template_name: Filename inside templates/
-    @param context: Named variables for template
-    @return Rendered HTML string
-    """
-    try:
-        template = env.get_template(template_name)
-        return template.render(**context)
-    except Exception as e:
-        logger.error(f"Template rendering error: {e}")
-        raise
-
 
 def send_email(subject: str, to_address: str, text_body: str = "", html_body: str = None):
     """
@@ -72,7 +48,7 @@ def send_email(subject: str, to_address: str, text_body: str = "", html_body: st
     except Exception as e:
         logger.error(f"Failed to send email to {to_address}: {e}")
         raise
-		
+        
 if __name__ == "__main__":
     console.rule("[bold green]Email Test Mode[/bold green]")
     try:
@@ -98,14 +74,14 @@ if __name__ == "__main__":
                 topic=topic,
                 message=message
             )
-            console.print("[green]✔ HTML rendered successfully[/green]")
+            console.print("[green][OK] HTML rendered successfully[/green]")
 
         logger.info("Sending email...")
         send_email(subject, to_address, text_body, html_body)
-        console.print(f"[bold green]✔ Email sent to [white]{to_address}[/white][/bold green]")
+        console.print(f"[bold green][OK] Email sent to [white]{to_address}[/white][/bold green]")
 
     except KeyboardInterrupt:
         console.print("\n[yellow][!] Cancelled by user.[/yellow]")
     except Exception as e:
         logger.exception("An unexpected error occurred")
-        console.print(f"[bold red]✘ Failed:[/bold red] {e}")
+        console.print(f"[bold red][FAIL] Failed:[/bold red] {e}")
