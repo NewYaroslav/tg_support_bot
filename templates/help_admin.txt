@@ -1,0 +1,14 @@
+<b>Справка для админов</b>
+
+Основные команды:
+/start — начать обращение  
+/help — показать справку  
+/myid — ваш Telegram ID
+
+<b>Админ-команды:</b>
+/add_email &lt;email&gt; — добавить/разблокировать email  
+/ban_email &lt;email&gt; — заблокировать email  
+/remove_email &lt;email&gt; — удалить email  
+/check_email &lt;email&gt; — проверить статус email
+
+Укажите несколько email-адресов через пробел для пакетной обработки.

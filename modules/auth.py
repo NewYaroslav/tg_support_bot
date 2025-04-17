@@ -1,5 +1,6 @@
 import re
 import yaml
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 from modules.states import UserState
@@ -103,7 +104,7 @@ async def handle_authorization(update: Update, context: ContextTypes.DEFAULT_TYP
                 await asyncio.sleep(delay)
 
             if auth_config.get("send_welcome_before_topic", False):
-                text = render_template("welcome_user.txt", username=username, email=email)
+                text = render_template("welcome_user.txt", username=username, email=email, parse_mode="HTML")
 
                 if telegram_start.get("show_action_button_if_authorized", False):
                     # Показываем кнопку — ждём нажатие, не отправляем топики

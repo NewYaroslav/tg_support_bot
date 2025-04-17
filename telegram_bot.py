@@ -1,13 +1,14 @@
 import os
 from dotenv import load_dotenv
 from telegram import BotCommand
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from jinja2 import Environment, FileSystemLoader
 from rich.console import Console
 import colorlog
 from modules.template_engine import render_template
-from modules.routing import route_message
-from modules.common import handle_start_command, handle_help_command
+from modules.routing import route_message, handle_inline_button
+from modules.common import handle_start_command, handle_help_command, handle_my_id_command
+from modules.admin_commands import handle_add_email, handle_ban_email, handle_remove_email, handle_check_email
 from modules.storage import db_init
 from modules.config import telegram_menu
 from modules.log_utils import log_async_call, log_sync_call
@@ -41,7 +42,13 @@ def run_telegram_bot():
 
     app.add_handler(CommandHandler("start", handle_start_command))
     app.add_handler(CommandHandler("help", handle_help_command))
+    app.add_handler(CommandHandler("myid", handle_my_id_command))
+    app.add_handler(CommandHandler("add_email", handle_add_email))
+    app.add_handler(CommandHandler("ban_email", handle_ban_email))
+    app.add_handler(CommandHandler("remove_email", handle_remove_email))
+    app.add_handler(CommandHandler("check_email", handle_check_email))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, route_message))
+    app.add_handler(CallbackQueryHandler(handle_inline_button))
 
     console.print("[bold green]Telegram bot is running[/bold green]")
     logger.info("Telegram bot is now polling for messages")

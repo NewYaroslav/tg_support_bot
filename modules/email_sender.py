@@ -10,9 +10,7 @@ from modules.template_engine import render_template
 
 console = Console()
 
-# Загрузка .env
 load_dotenv()
-
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER")

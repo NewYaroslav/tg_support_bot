@@ -1,0 +1,4 @@
+✅ Добавлены/разрешены email-адреса:
+{% for email in emails %}
+• {{ email }}
+{% endfor %}

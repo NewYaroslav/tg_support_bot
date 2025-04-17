@@ -2,7 +2,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from modules.states import UserState
 from modules.auth import handle_authorization, handle_email_change_confirmation
-from modules.flow import handle_topic_selection, handle_text_submission, handle_idle_state, handle_unknown_message
+from modules.flow import handle_request_button, handle_topic_selection, handle_text_submission, handle_idle_state, handle_unknown_message
 from modules.log_utils import log_async_call
 from modules.logging_config import logger
 
@@ -26,11 +26,14 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == UserState.IDLE:
         await handle_idle_state(update, context)
         
-    if state == UserState.WAITING_FOR_EMAIL:
+    elif state == UserState.WAITING_FOR_EMAIL:
         await handle_authorization(update, context)
 
     elif state == UserState.CONFIRMING_EMAIL_CHANGE:
         await handle_email_change_confirmation(update, context)
+    
+    elif state == UserState.WAITING_FOR_REQUEST_BUTTON:
+        await handle_request_button(update, context)
 
     elif state == UserState.WAITING_FOR_TOPIC:
         await handle_topic_selection(update, context)
@@ -42,8 +45,26 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_unknown_message(update, context)
 
 
-def reset_user_state(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Сброс состояния пользователя в IDLE (по умолчанию).
-    """
-    context.user_data["state"] = UserState.IDLE
+@log_async_call
+async def handle_inline_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    state = context.user_data.get("state")
+
+    if query.data == "submit_request":
+        if state == UserState.WAITING_FOR_REQUEST_BUTTON:
+            await handle_request_button(update, context)
+        else:
+            await query.message.reply_text("An unexpected error occurred. Please try again later.")
+
+    elif query.data.startswith("topic:"):
+        if state == UserState.WAITING_FOR_TOPIC:
+            await handle_topic_selection(update, context)
+        else:
+            await query.message.reply_text("An unexpected error occurred. Please try again later.")
+
+    else:
+        await query.message.reply_text("An unexpected error occurred. Please try again later.")
+        
+

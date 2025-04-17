@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardRemove, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from modules.states import UserState
 from modules.email_sender import send_email
@@ -10,11 +10,14 @@ from modules.template_engine import render_template
 from modules.config import ticket_categories
 from modules.log_utils import log_async_call
 from modules.logging_config import logger
+from modules.config import message_limits
 
 # Загрузка переменных назначения
 load_dotenv()
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL")
 SUPPORT_CHAT_ID = os.getenv("SUPPORT_CHAT_ID")
+
+max_submission_length = message_limits.get("max_submission_length", 1500)
 
 @log_async_call
 async def handle_idle_state(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -46,35 +49,52 @@ async def handle_idle_state(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception(f"Error in handle_idle_state for user {user.id}: {e}")
         await update.message.reply_text("An unexpected error occurred. Please try again later.")
+        
+@log_async_call
+async def handle_request_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    query = update.callback_query
+    try:
+        context.user_data["state"] = UserState.WAITING_FOR_TOPIC
+        text = render_template("select_topic.txt")
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(cat, callback_data=f"topic:{cat}")]
+            for cat in ticket_categories
+        ])
+        await query.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+    
+    except Exception as e:
+        logger.exception(f"Error in handle_request_button for user {user.id}: {e}")
+        await update.message.reply_text("An unexpected error occurred. Please try again later.")
 
 @log_async_call
 async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    selected_topic = update.message.text.strip()
+    user = update.effective_user
+    query = update.callback_query
+    selected_topic = query.data.removeprefix("topic:")
 
     if selected_topic not in ticket_categories:
-        logger.warning(f"Invalid topic selected: {selected_topic}")
+        logger.warning(f"Invalid topic selected by user {user.id}: {selected_topic}")
         text = render_template("invalid_topic.txt")
-        await update.message.reply_text(text)
+        await query.message.reply_text(text)
         return
 
-    logger.info(f"User selected topic: {selected_topic}")
+    logger.info(f"User {user.id} selected topic: {selected_topic}")
     context.user_data["selected_topic"] = selected_topic
     context.user_data["state"] = UserState.WAITING_FOR_MESSAGE_TEXT
 
     try:
         text = render_template("enter_message.txt", topic=selected_topic)
-        await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
-
+        await query.message.reply_text(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
     except Exception as e:
-        logger.exception(f"Error in handle_topic_selection: {e}")
-        await update.message.reply_text("An unexpected error occurred. Please try again later.")
+        logger.exception(f"Error in handle_topic_selection for user {user.id}: {e}")
+        await query.message.reply_text("An unexpected error occurred. Please try again later.")
 
 @log_async_call
 async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_message = update.message.text.strip()
 
-    max_submission_length = message_limits.get("max_submission_length", 1500)
     if len(user_message) > max_submission_length:
         logger.warning(f"User {user.id} submitted too long message: {len(user_message)} chars")
         warning = render_template("message_too_long.txt", max_length=max_submission_length)

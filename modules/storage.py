@@ -1,10 +1,12 @@
-import sqlite3
 import os
-import logging
+import sqlite3
+from dotenv import load_dotenv
 from modules.log_utils import log_sync_call
+from modules.logging_config import logger
 
-logger = logging.getLogger("tg_support_bot.storage")
+load_dotenv()
 DB_PATH = os.getenv("DB_PATH", "database/db.sqlite3")
+ROOT_ADMIN_ID = int(os.getenv("ROOT_ADMIN_ID", 0))
 
 @log_sync_call
 def db_init():
@@ -72,7 +74,11 @@ def db_init():
 def db_add_allowed_email(email: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO allowed_emails (email) VALUES (?)", (email,))
+    cursor.execute("""
+        INSERT INTO allowed_emails (email, is_banned)
+        VALUES (?, 0)
+        ON CONFLICT(email) DO UPDATE SET is_banned = 0
+    """, (email,))
     conn.commit()
     conn.close()
 
@@ -172,3 +178,39 @@ def db_update_user_email(telegram_id: int, new_email: str):
     conn.commit()
     conn.close()
     return True
+    
+@log_sync_call
+def db_is_admin(telegram_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM admins WHERE telegram_id = ?", (telegram_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] > 0
+
+@log_sync_call
+def db_add_admin(telegram_id: int, is_top_level: bool = False):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO admins (telegram_id, is_top_level) VALUES (?, ?)", (telegram_id, int(is_top_level)))
+    conn.commit()
+    conn.close()
+
+@log_sync_call
+def db_remove_admin(telegram_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM admins WHERE telegram_id = ?", (telegram_id,))
+    conn.commit()
+    conn.close()
+
+@log_sync_call
+def db_list_admins():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM admins")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+

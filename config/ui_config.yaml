@@ -3,6 +3,8 @@ telegram_menu:
     description: "Обратиться за помощью"
   - command: help
     description: "Показать справку"
+  - command: myid
+    description: "Показать ID и email (если есть)"
 
 telegram_start:
   show_action_button_if_authorized: true
@@ -12,6 +14,10 @@ authorization:
   confirm_change_buttons:
     yes: "✅ Да"
     no: "❌ Нет"
+    
+  email_status_labels:
+    allowed: "✅ Разрешён"
+    banned: "🚫 Забанен"
 
 ticket_categories:
   - "💻 Аппаратные сбои"
