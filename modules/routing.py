@@ -1,8 +1,10 @@
+import time
 from telegram import Update
 from telegram.ext import ContextTypes
 from modules.states import UserState
 from modules.auth import handle_authorization, handle_email_change_confirmation
 from modules.flow import handle_request_button, handle_topic_selection, handle_text_submission, handle_idle_state, handle_unknown_message
+from modules.media_group_buffer import pending_media_groups, media_group_timestamps
 from modules.log_utils import log_async_call
 from modules.logging_config import logger
 
@@ -21,6 +23,18 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Initialized state for user {update.effective_user.id}: {state}")
     else:
         logger.info(f"Routing message for user {update.effective_user.id} in state: {state}")
+
+    message = update.message
+    media_group_id = message.media_group_id
+
+    if media_group_id and media_group_id in media_group_timestamps:
+        current_time = time.time()
+        pending_media_groups[media_group_id].append({
+            "message": message,
+            "topic": context.user_data.get("selected_topic", "N/A")
+        })
+        media_group_timestamps[media_group_id] = current_time
+        return  # Ожидаем, пока медиагруппа не соберётся — обрабатываем позже в check_media_group_expiry_loop
 
     # Роутинг на основании текущего состояния
     if state == UserState.IDLE:

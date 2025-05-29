@@ -70,6 +70,7 @@ async def handle_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 @log_async_call
 async def handle_my_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    chat = update.effective_chat
     user_data = db_get_user_by_telegram_id(user.id)
     email = None
 
@@ -80,6 +81,7 @@ async def handle_my_id_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "my_id.txt",
         telegram_id=user.id,
         username=user.username or user.first_name or "user",
+        chat_id=chat.id,
         email=email
     )
 

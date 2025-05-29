@@ -1,5 +1,6 @@
 Ваш Telegram ID: {{ telegram_id }}
 Пользователь: {{ username }}
+Чат ID: {{ chat_id }}
 {% if email %}
 Привязанный email: {{ email }}
 {% else %}

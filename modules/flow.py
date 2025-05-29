@@ -1,6 +1,8 @@
 import os
+import time
+import asyncio
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardRemove, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, ReplyKeyboardRemove, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from telegram.ext import ContextTypes
 from modules.states import UserState
 from modules.email_sender import send_email
@@ -11,6 +13,7 @@ from modules.config import ticket_categories
 from modules.log_utils import log_async_call
 from modules.logging_config import logger
 from modules.config import message_limits
+from modules.media_group_buffer import pending_media_groups, media_group_timestamps, MEDIA_GROUP_TIMEOUT_SEC
 
 # Загрузка переменных назначения
 load_dotenv()
@@ -19,11 +22,13 @@ SUPPORT_CHAT_ID = os.getenv("SUPPORT_CHAT_ID")
 
 max_submission_length = message_limits.get("max_submission_length", 1500)
 
+
 @log_async_call
 async def handle_idle_state(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     username = user.first_name or user.username or "user"
-    user_input = update.message.text.strip()
+    message = update.message
+    user_input = (message.text or message.caption or "").strip()
 
     if is_valid_email(normalize_email(user_input)):
         # Вне зависимости от авторизации пробуем авторизоваться или переавторизоваться
@@ -71,6 +76,17 @@ async def handle_request_button(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     query = update.callback_query
+
+    if query is None:
+        logger.error(f"Expected CallbackQuery, but got None (user: {user.id})")
+        await update.message.reply_text("Произошла ошибка: кнопка не определена.")
+        return
+
+    if not query.data or not query.data.startswith("topic:"):
+        logger.warning(f"Unexpected callback data: {query.data}")
+        await query.message.reply_text("Неверный выбор. Попробуйте снова.")
+        return
+
     selected_topic = query.data.removeprefix("topic:")
 
     if selected_topic not in ticket_categories:
@@ -93,14 +109,37 @@ async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_T
 @log_async_call
 async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_message = update.message.text.strip()
+    message = update.message
+    telegram_id = user.id
+    username = user.username or user.first_name or "N/A"
+    
+    # Получить текст, либо подпись, либо пусто
+    user_message = message.text or message.caption or ""
+    user_message = user_message.strip()
+
+    if not user_message:
+        user_message = "(no text)"
+        
+    # Данные для медиагруппы
+    media_group_id = message.media_group_id
+    current_time = time.time()
 
     if len(user_message) > max_submission_length:
         logger.warning(f"User {user.id} submitted too long message: {len(user_message)} chars")
         warning = render_template("message_too_long.txt", max_length=max_submission_length)
         await update.message.reply_text(warning)
         return
+        
+    if media_group_id:
+        pending_media_groups[media_group_id].append({
+            "message": message,
+            "topic": context.user_data.get("selected_topic", "N/A")
+        })
+        media_group_timestamps[media_group_id] = current_time
+        context.user_data["state"] = UserState.IDLE
+        return
 
+    # Получаем email
     user_data = db_get_user_by_telegram_id(user.id)
     email = None
     if user_data and user_data.get("email_id"):
@@ -109,11 +148,10 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
     if not email:
         logger.error(f"Email not found for user ID {user.id}")
         await update.message.reply_text("An unexpected error occurred. Please try again later.")
+        context.user_data["state"] = UserState.IDLE
         return
 
     topic = context.user_data.get("selected_topic", "N/A")
-    username = user.username or user.first_name or "N/A"
-    telegram_id = user.id
 
     text_summary = render_template(
         "ticket_summary.txt",
@@ -131,6 +169,53 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
                 logger.info(f"Message from user {user.id} sent to support chat")
             except Exception as e:
                 logger.error(f"Failed to send message to support chat: {e}")
+                
+            # Собираем все типы вложений
+            media_sent = False
+            
+            # Фото — может быть несколько
+            if message.photo:
+                largest_photo = message.photo[-1]  # последнее — самое большое
+                try:
+                    await context.bot.send_photo(chat_id=SUPPORT_CHAT_ID, photo=largest_photo.file_id)
+                    media_sent = True
+                except Exception as e:
+                    logger.error(f"Failed to send photo from user {user.id}: {e}")
+
+            # Документ
+            if message.document:
+                try:
+                    await context.bot.send_document(chat_id=SUPPORT_CHAT_ID, document=message.document.file_id)
+                    media_sent = True
+                except Exception as e:
+                    logger.error(f"Failed to send document from user {user.id}: {e}")
+
+            # Видео
+            if message.video:
+                try:
+                    await context.bot.send_video(chat_id=SUPPORT_CHAT_ID, video=message.video.file_id)
+                    media_sent = True
+                except Exception as e:
+                    logger.error(f"Failed to send video from user {user.id}: {e}")
+
+            # Голосовые
+            if message.voice:
+                try:
+                    await context.bot.send_voice(chat_id=SUPPORT_CHAT_ID, voice=message.voice.file_id)
+                    media_sent = True
+                except Exception as e:
+                    logger.error(f"Failed to send voice from user {user.id}: {e}")
+
+            # Аудио
+            if message.audio:
+                try:
+                    await context.bot.send_audio(chat_id=SUPPORT_CHAT_ID, audio=message.audio.file_id)
+                    media_sent = True
+                except Exception as e:
+                    logger.error(f"Failed to send audio from user {user.id}: {e}")
+
+            if media_sent:
+                logger.info(f"Media from user {user.id} sent to support chat")
 
         if SUPPORT_EMAIL:
             try:
@@ -163,6 +248,70 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
         logger.exception(f"Error in handle_text_submission: {e}")
         await update.message.reply_text("An unexpected error occurred. Please try again later.")
        
+@log_async_call
+async def process_media_group(entries, context):
+    if not entries:
+        return
+
+    first = entries[0]["message"]
+    topic = entries[0]["topic"]
+
+    chat_id = first.chat.id
+    user = first.from_user
+    telegram_id = user.id
+    username = user.username or user.first_name or "N/A"
+
+    caption = first.caption or ""
+
+    user_data = db_get_user_by_telegram_id(user.id)
+    email = db_get_email_by_id(user_data["email_id"]) if user_data else None
+
+    text_summary = render_template(
+        "ticket_summary.txt",
+        username=username,
+        telegram_id=telegram_id,
+        email=email,
+        topic=topic,
+        message=caption.strip()
+    )
+
+    try:
+        await context.bot.send_message(chat_id=SUPPORT_CHAT_ID, text=text_summary)
+
+        media = [
+            InputMediaPhoto(media=entry["message"].photo[-1].file_id)
+            for entry in entries if entry["message"].photo
+        ]
+
+        if media:
+            await context.bot.send_media_group(chat_id=SUPPORT_CHAT_ID, media=media)
+
+        await first.reply_text(render_template("ticket_sent.txt"))
+        
+        # context.user_data["state"] = UserState.IDLE
+
+    except Exception as e:
+        logger.exception(f"Error in process_media_group: {e}")
+        await first.reply_text("An unexpected error occurred. Please try again later.")
+    
+@log_async_call 
+async def check_media_group_expiry_loop(app):
+    while True:
+        await asyncio.sleep(1.0)
+
+        expired_groups = [
+            group_id for group_id, ts in media_group_timestamps.items()
+            if time.time() - ts > MEDIA_GROUP_TIMEOUT_SEC
+        ]
+
+        for group_id in expired_groups:
+            entries = pending_media_groups.pop(group_id, [])
+            media_group_timestamps.pop(group_id, None)
+
+            if entries:
+                context = ContextTypes.DEFAULT_TYPE(application=app)
+                await process_media_group(entries, context)
+
 @log_async_call    
 async def handle_unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
