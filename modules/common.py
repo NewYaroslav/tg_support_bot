@@ -5,7 +5,7 @@ from rich.console import Console
 from modules.template_engine import render_template
 from modules.storage import db_get_user_by_telegram_id, db_get_email_by_id
 from modules.states import UserState
-from modules.config import telegram_start
+from modules.config import telegram_start, message_limits
 from modules.log_utils import log_async_call
 from modules.logging_config import logger
 from modules.auth_utils import is_admin

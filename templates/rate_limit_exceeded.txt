@@ -1,0 +1,2 @@
+{{ username }}, you have reached the request limit ({{ max_requests }} per {{ interval_minutes }} minutes).
+Please wait {{ wait_str }} before trying again.

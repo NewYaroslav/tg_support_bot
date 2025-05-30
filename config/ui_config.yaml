@@ -30,3 +30,5 @@ ticket_categories:
 
 message_limits:
   max_submission_length: 1500
+  max_requests: 3
+  interval_sec: 3600

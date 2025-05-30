@@ -1,6 +1,7 @@
 import os
 import time
 import asyncio
+import mimetypes
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardRemove, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from telegram.ext import ContextTypes
@@ -9,11 +10,12 @@ from modules.email_sender import send_email
 from modules.auth import handle_authorization, is_valid_email, normalize_email
 from modules.storage import db_get_user_by_telegram_id, db_get_email_by_id
 from modules.template_engine import render_template
-from modules.config import ticket_categories
+from modules.config import ticket_categories, message_limits
 from modules.log_utils import log_async_call
 from modules.logging_config import logger
-from modules.config import message_limits
 from modules.media_group_buffer import pending_media_groups, media_group_timestamps, MEDIA_GROUP_TIMEOUT_SEC
+from io import BytesIO
+from datetime import datetime, timedelta
 
 # Загрузка переменных назначения
 load_dotenv()
@@ -22,11 +24,24 @@ SUPPORT_CHAT_ID = os.getenv("SUPPORT_CHAT_ID")
 
 max_submission_length = message_limits.get("max_submission_length", 1500)
 
+def make_attachment(data: bytes, filename: str, fallback_type: str = "application/octet-stream"):
+    mimetype, _ = mimetypes.guess_type(filename)
+    if mimetype:
+        maintype, subtype = mimetype.split("/", 1)
+    else:
+        maintype, subtype = fallback_type.split("/", 1)
+
+    return {
+        "data": data,
+        "maintype": maintype,
+        "subtype": subtype,
+        "filename": filename
+    }
 
 @log_async_call
 async def handle_idle_state(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    username = user.first_name or user.username or "user"
+    username = user.first_name or user.username or "User"
     message = update.message
     user_input = (message.text or message.caption or "").strip()
 
@@ -59,15 +74,62 @@ async def handle_idle_state(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_request_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     query = update.callback_query
+    username = user.first_name or user.username or "User"
+    
+    max_requests = int(message_limits.get("max_requests", 1))
+    interval_sec = int(message_limits.get("interval_sec", 60))
+
+    now_ts = int(datetime.utcnow().timestamp())
+    last_ts = context.user_data.get("request_timestamp", 0)
+    count = context.user_data.get("request_count", 0)
+
+    # Обнуляем счётчик, если время вышло
+    if now_ts - last_ts >= interval_sec:
+        count = 0
+        last_ts = now_ts
+        
+    # Проверка лимита
+    if count >= max_requests:
+        interval_minutes = interval_sec // 60
+        wait_sec = interval_sec - (now_ts - last_ts)
+
+        hours = wait_sec // 3600
+        minutes = (wait_sec % 3600) // 60
+        seconds = wait_sec % 60
+
+        wait_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+        text = render_template(
+            "rate_limit_exceeded.txt",
+            username=username,
+            max_requests=max_requests,
+            interval_minutes=interval_minutes,
+            wait_str=wait_str
+        )
+
+        if update.message:
+            await update.message.reply_text(text, parse_mode="HTML")
+        elif update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text(text, parse_mode="HTML")
+        else:
+            logger.warning(f"Can't respond to user {user.id}, no message context.")
+        return
+
     try:
-        context.user_data["state"] = UserState.WAITING_FOR_TOPIC
-        text = render_template("select_topic.txt")
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(cat, callback_data=f"topic:{cat}")]
             for cat in ticket_categories
         ])
-        await query.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
-    
+        
+        context.user_data["state"] = UserState.WAITING_FOR_TOPIC
+        
+        if query and query.message:
+            text = render_template("select_topic.txt", username=username)
+            await query.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            text = render_template("select_topic_intro.txt", username=username)
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+
     except Exception as e:
         logger.exception(f"Error in handle_request_button for user {user.id}: {e}")
         await update.message.reply_text("An unexpected error occurred. Please try again later.")
@@ -76,15 +138,21 @@ async def handle_request_button(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     query = update.callback_query
+    username = user.first_name or user.username or "User"
 
     if query is None:
         logger.error(f"Expected CallbackQuery, but got None (user: {user.id})")
-        await update.message.reply_text("Произошла ошибка: кнопка не определена.")
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(cat, callback_data=f"topic:{cat}")]
+            for cat in ticket_categories
+        ])
+        text = render_template("select_topic_intro.txt", username=username)
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
         return
 
     if not query.data or not query.data.startswith("topic:"):
         logger.warning(f"Unexpected callback data: {query.data}")
-        await query.message.reply_text("Неверный выбор. Попробуйте снова.")
+        await query.message.reply_text("Invalid topic selection. Please choose one of the available options.")
         return
 
     selected_topic = query.data.removeprefix("topic:")
@@ -113,6 +181,32 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
     telegram_id = user.id
     username = user.username or user.first_name or "N/A"
     
+    try:
+        user_data = db_get_user_by_telegram_id(user.id)
+        is_authorized = user_data and user_data.get("is_authorized")
+
+        if not is_authorized:
+            # Не авторизован
+            context.user_data["state"] = UserState.WAITING_FOR_EMAIL
+            text = render_template("auth_start.txt", username=username)
+            logger.info(f"User {user.id} prompted for email input")
+            await update.message.reply_text(text)
+            return
+
+    except Exception as e:
+        logger.exception(f"Error in handle_idle_state for user {user.id}: {e}")
+        await update.message.reply_text("An unexpected error occurred. Please try again later.")
+        
+    now_ts = int(datetime.utcnow().timestamp())
+    last_ts = context.user_data.get("request_timestamp", 0)
+    count = context.user_data.get("request_count", 0)
+
+    # Обнуляем счётчик, если время вышло
+    interval_sec = int(message_limits.get("interval_sec", 60))
+    if now_ts - last_ts >= interval_sec:
+        count = 0
+        last_ts = now_ts
+    
     # Получить текст, либо подпись, либо пусто
     user_message = message.text or message.caption or ""
     user_message = user_message.strip()
@@ -136,6 +230,9 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
             "topic": context.user_data.get("selected_topic", "N/A")
         })
         media_group_timestamps[media_group_id] = current_time
+
+        context.user_data["request_timestamp"] = last_ts
+        context.user_data["request_count"] = count + 1
         context.user_data["state"] = UserState.IDLE
         return
 
@@ -163,6 +260,8 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
     )
 
     try:
+        attachments = []
+        
         if SUPPORT_CHAT_ID:
             try:
                 await context.bot.send_message(chat_id=SUPPORT_CHAT_ID, text=text_summary)
@@ -176,6 +275,20 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
             # Фото — может быть несколько
             if message.photo:
                 largest_photo = message.photo[-1]  # последнее — самое большое
+                
+                try:
+                    largest_photo = message.photo[-1]
+                    file = await context.bot.get_file(largest_photo.file_id)
+                    file_bytes = await file.download_as_bytearray()
+                    filename = f"photo_{user.id}.jpg"  # Telegram photo = JPEG
+
+                    attachments.append(make_attachment(file_bytes, filename))
+                except Exception as e:
+                    logger.error(f"Failed to download photo from user {user.id}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Failed to fetch photo for email from user {user.id}: {e}")
+
                 try:
                     await context.bot.send_photo(chat_id=SUPPORT_CHAT_ID, photo=largest_photo.file_id)
                     media_sent = True
@@ -185,6 +298,18 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
             # Документ
             if message.document:
                 try:
+                    file = await context.bot.get_file(message.document.file_id)
+                    file_bytes = await file.download_as_bytearray()
+                    filename = message.document.file_name or f"document_{user.id}"
+
+                    attachments.append(make_attachment(file_bytes, filename))
+                except Exception as e:
+                    logger.error(f"Failed to download document from user {user.id}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Failed to download document from user {user.id}: {e}")
+
+                try:
                     await context.bot.send_document(chat_id=SUPPORT_CHAT_ID, document=message.document.file_id)
                     media_sent = True
                 except Exception as e:
@@ -192,6 +317,15 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
 
             # Видео
             if message.video:
+                try:
+                    file = await context.bot.get_file(message.video.file_id)
+                    file_bytes = await file.download_as_bytearray()
+                    filename = f"video_{user.id}.mp4"
+
+                    attachments.append(make_attachment(file_bytes, filename, "video/mp4"))
+                except Exception as e:
+                    logger.error(f"Failed to download video from user {user.id}: {e}")
+        
                 try:
                     await context.bot.send_video(chat_id=SUPPORT_CHAT_ID, video=message.video.file_id)
                     media_sent = True
@@ -201,6 +335,15 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
             # Голосовые
             if message.voice:
                 try:
+                    file = await context.bot.get_file(message.voice.file_id)
+                    file_bytes = await file.download_as_bytearray()
+                    filename = f"voice_{user.id}.ogg"
+
+                    attachments.append(make_attachment(file_bytes, filename, "audio/ogg"))
+                except Exception as e:
+                    logger.error(f"Failed to download voice from user {user.id}: {e}")
+        
+                try:
                     await context.bot.send_voice(chat_id=SUPPORT_CHAT_ID, voice=message.voice.file_id)
                     media_sent = True
                 except Exception as e:
@@ -208,6 +351,15 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
 
             # Аудио
             if message.audio:
+                try:
+                    file = await context.bot.get_file(message.audio.file_id)
+                    file_bytes = await file.download_as_bytearray()
+                    filename = message.audio.file_name or f"audio_{user.id}.mp3"
+
+                    attachments.append(make_attachment(file_bytes, filename, "audio/mpeg"))
+                except Exception as e:
+                    logger.error(f"Failed to download audio from user {user.id}: {e}")
+        
                 try:
                     await context.bot.send_audio(chat_id=SUPPORT_CHAT_ID, audio=message.audio.file_id)
                     media_sent = True
@@ -219,6 +371,7 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
 
         if SUPPORT_EMAIL:
             try:
+                subject = render_template("email_subject.txt", topic=topic)
                 html_body = render_template(
                     "support_email.html",
                     telegram_username=username,
@@ -228,10 +381,11 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
                     message=user_message
                 )
                 send_email(
-                    subject=f"New support request: {topic}",
+                    subject=subject,
                     to_address=SUPPORT_EMAIL,
                     text_body=text_summary,
-                    html_body=html_body
+                    html_body=html_body,
+                    attachments=attachments
                 )
                 logger.info(f"Email from user {user.id} sent to {SUPPORT_EMAIL}")
             except Exception as e:
@@ -242,6 +396,8 @@ async def handle_text_submission(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=ReplyKeyboardRemove()
         )
 
+        context.user_data["request_timestamp"] = last_ts
+        context.user_data["request_count"] = count + 1
         context.user_data["state"] = UserState.IDLE
 
     except Exception as e:
@@ -276,19 +432,60 @@ async def process_media_group(entries, context):
     )
 
     try:
-        await context.bot.send_message(chat_id=SUPPORT_CHAT_ID, text=text_summary)
+        if SUPPORT_CHAT_ID:
+            try:
+                await context.bot.send_message(chat_id=SUPPORT_CHAT_ID, text=text_summary)
 
-        media = [
-            InputMediaPhoto(media=entry["message"].photo[-1].file_id)
-            for entry in entries if entry["message"].photo
-        ]
+                media = [
+                    InputMediaPhoto(media=entry["message"].photo[-1].file_id)
+                    for entry in entries if entry["message"].photo
+                ]
 
-        if media:
-            await context.bot.send_media_group(chat_id=SUPPORT_CHAT_ID, media=media)
+                if media:
+                    await context.bot.send_media_group(chat_id=SUPPORT_CHAT_ID, media=media)
+
+                logger.info(f"Message from user {user.id} sent to support chat")
+            except Exception as e:
+                logger.error(f"Failed to send message to support chat: {e}")
+                
+        if SUPPORT_EMAIL:
+            # Подготовка вложений для email
+            attachments = []
+            for entry in entries:
+                msg = entry["message"]
+                if msg.photo:
+                    largest_photo = msg.photo[-1]
+                    try:
+                        file = await context.bot.get_file(largest_photo.file_id)
+                        file_bytes = await file.download_as_bytearray()
+                        filename = f"photo_{msg.message_id}.jpg"
+                        attachments.append(make_attachment(file_bytes, filename))
+                    except Exception as e:
+                        logger.error(f"Failed to download photo for email in media group: {e}")
+
+            try:
+                subject = render_template("email_subject.txt", topic=topic)
+                html_body = render_template(
+                    "support_email.html",
+                    telegram_username=username,
+                    telegram_id=telegram_id,
+                    email=email,
+                    topic=topic,
+                    message=caption.strip()
+                )
+
+                send_email(
+                    subject=subject,
+                    to_address=SUPPORT_EMAIL,
+                    text_body=text_summary,
+                    html_body=html_body,
+                    attachments=attachments
+                )
+                logger.info(f"Email from user {user.id} sent to {SUPPORT_EMAIL}")
+            except Exception as e:
+                logger.error(f"Failed to send email to support: {e}")
 
         await first.reply_text(render_template("ticket_sent.txt"))
-        
-        # context.user_data["state"] = UserState.IDLE
 
     except Exception as e:
         logger.exception(f"Error in process_media_group: {e}")

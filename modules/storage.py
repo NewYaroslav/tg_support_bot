@@ -73,20 +73,87 @@ def db_init():
 @log_sync_call
 def db_add_allowed_email(email: str):
     conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO allowed_emails (email, is_banned)
+            VALUES (?, 0)
+            ON CONFLICT(email) DO UPDATE SET is_banned = 0
+        """, (email,))
+
+        cursor.execute("SELECT id FROM allowed_emails WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        if row:
+            email_id = row[0]
+
+            cursor.execute("""
+                UPDATE users
+                SET is_authorized = 1
+                WHERE email_id = ? AND is_authorized = 0
+            """, (email_id,))
+            logger.debug(f"Authorized {cursor.rowcount} users for email {email}")
+        else:
+            logger.warning(f"Email {email} inserted, but id not found (unexpected)")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+        
+@log_sync_call
+def db_get_telegram_ids_by_email(email: str) -> list[int]:
+    """
+    Возвращает список telegram_id всех пользователей, у которых задан данный email.
+    """
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO allowed_emails (email, is_banned)
-        VALUES (?, 0)
-        ON CONFLICT(email) DO UPDATE SET is_banned = 0
-    """, (email,))
-    conn.commit()
+
+    cursor.execute("SELECT id FROM allowed_emails WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return []
+
+    email_id = row[0]
+
+    cursor.execute("SELECT telegram_id FROM users WHERE email_id = ?", (email_id,))
+    rows = cursor.fetchall()
     conn.close()
+
+    return [r[0] for r in rows]
 
 @log_sync_call
 def db_remove_allowed_email(email: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM allowed_emails WHERE email = ?", (email,))
+    conn.commit()
+    conn.close()
+    
+@log_sync_call
+def db_unlink_users_from_email(email: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM allowed_emails WHERE email = ?", (email,))
+    result = cursor.fetchone()
+    if not result:
+        conn.close()
+        return  # Email не найден — ничего не делаем
+
+    email_id = result[0]
+
+    cursor.execute("""
+        UPDATE users
+        SET email_id = NULL, is_authorized = 0
+        WHERE email_id = ?
+    """, (email_id,))
+
+    cursor.execute("DELETE FROM allowed_emails WHERE id = ?", (email_id,))
+
     conn.commit()
     conn.close()
 
@@ -115,6 +182,28 @@ def db_get_user_by_telegram_id(telegram_id: int):
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+    
+@log_sync_call
+def db_get_users_by_email(email: str) -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # Получаем email_id
+    cursor.execute("SELECT id FROM allowed_emails WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return []
+
+    email_id = row[0]
+
+    # Получаем всех пользователей с этим email_id
+    cursor.execute("SELECT * FROM users WHERE email_id = ?", (email_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [dict(r) for r in rows]
     
 @log_sync_call
 def db_get_email_by_id(email_id: int) -> str:

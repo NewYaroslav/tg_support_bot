@@ -1,7 +1,7 @@
 import re
 import yaml
 import asyncio
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from telegram.ext import ContextTypes
 from modules.states import UserState
 from modules.template_engine import render_template
@@ -104,23 +104,32 @@ async def handle_authorization(update: Update, context: ContextTypes.DEFAULT_TYP
                 await asyncio.sleep(delay)
 
             if auth_config.get("send_welcome_before_topic", False):
-                text = render_template("welcome_user.txt", username=username, email=email, parse_mode="HTML")
+                text = render_template("welcome_user.txt", username=username, email=email)
 
                 if telegram_start.get("show_action_button_if_authorized", False):
                     # Показываем кнопку — ждём нажатие, не отправляем топики
-                    context.user_data["state"] = UserState.WAITING_FOR_REQUEST_BUTTON
                     button_text = telegram_start.get("action_button_text", "Submit a request")
-                    keyboard = [[button_text]]
-                    await update.message.reply_text(text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton(text=button_text, callback_data="submit_request")]
+                    ])
+                    
+                    context.user_data["state"] = UserState.WAITING_FOR_REQUEST_BUTTON
+                    
+                    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
                     return
                 else:
                     await update.message.reply_text(text)
 
             # Переход в состояние выбора темы
-            context.user_data["state"] = UserState.WAITING_FOR_TOPIC
             text = render_template("select_topic.txt")
-            keyboard = [[cat] for cat in categories]
-            await update.message.reply_text(text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(cat, callback_data=f"topic:{cat}")]
+                for cat in ticket_categories
+            ])
+            
+            context.user_data["state"] = UserState.WAITING_FOR_TOPIC
+            
+            await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
         else:
             context.user_data["state"] = UserState.IDLE
 

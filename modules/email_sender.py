@@ -16,7 +16,7 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 
-def send_email(subject: str, to_address: str, text_body: str = "", html_body: str = None):
+def send_email(subject: str, to_address: str, text_body: str = "", html_body: str = None, attachments: list = None):
     """
     Sends an email via SMTP with optional HTML version.
 
@@ -35,6 +35,15 @@ def send_email(subject: str, to_address: str, text_body: str = "", html_body: st
 
         if html_body:
             msg.add_alternative(html_body, subtype='html')
+            
+        if attachments:
+            for attachment in attachments:
+                msg.add_attachment(
+                    attachment["data"],
+                    maintype=attachment["maintype"],
+                    subtype=attachment["subtype"],
+                    filename=attachment["filename"]
+                )
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
